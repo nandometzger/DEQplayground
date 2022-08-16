@@ -12,6 +12,10 @@ from torch.utils.data import DataLoader
 from torch.autograd import gradcheck
 import torch.optim as optim
 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+
 class ResNetLayer(nn.Module):
     def __init__(self, n_channels, n_inner_channels, kernel_size=3, num_groups=8):
         super().__init__()
@@ -46,7 +50,8 @@ def anderson(f, x0, m=5, lam=1e-4, max_iter=50, tol=1e-2, beta = 1.0):
         n = min(k, m)
         G = F[:,:n]-X[:,:n]
         H[:,1:n+1,1:n+1] = torch.bmm(G,G.transpose(1,2)) + lam*torch.eye(n, dtype=x0.dtype,device=x0.device)[None]
-        alpha = torch.solve(y[:,:n+1], H[:,:n+1,:n+1])[0][:, 1:n+1, 0]   # (bsz x n)
+        alpha = torch.linalg.solve(H[:,:n+1,:n+1], y[:,:n+1],)[:, 1:n+1, 0]   # (bsz x n)
+        # alpha = torch.solve(y[:,:n+1], H[:,:n+1,:n+1])[0][:, 1:n+1, 0]   # (bsz x n)
         
         X[:,k%m] = beta * (alpha[:,None] @ F[:,:n])[:,0] + (1-beta)*(alpha[:,None] @ X[:,:n])[:,0]
         F[:,k%m] = f(X[:,k%m].view_as(x0)).view(bsz, -1)
@@ -79,12 +84,11 @@ class DEQFixedPoint(nn.Module):
                 
         z.register_hook(backward_hook)
         return z
+
 # run a very small network with double precision, iterating to high precision
 f = ResNetLayer(2,2, num_groups=2).double()
 deq = DEQFixedPoint(f, anderson, tol=1e-10, max_iter=500).double()
 gradcheck(deq, torch.randn(1,2,3,3).double().requires_grad_(), eps=1e-5, atol=1e-3, check_undefined_grad=False)
-
-
 
 f = ResNetLayer(64,128)
 deq = DEQFixedPoint(f, anderson, tol=1e-4, max_iter=100, beta=2.0)
@@ -100,7 +104,6 @@ out = deq(X)
 # plt.xlabel("Iteration")
 # plt.ylabel("Residual")
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 torch.manual_seed(0)
 chan = 48
@@ -112,11 +115,6 @@ model = nn.Sequential(nn.Conv2d(3,chan, kernel_size=3, bias=True, padding=1),
                       nn.AvgPool2d(8,8),
                       nn.Flatten(),
                       nn.Linear(chan*4*4,10)).to(device)
-
-cifar10_train = datasets.CIFAR10(".", train=True, download=True, transform=transforms.ToTensor())
-cifar10_test = datasets.CIFAR10(".", train=False, download=True, transform=transforms.ToTensor())
-train_loader = DataLoader(cifar10_train, batch_size = 100, shuffle=True, num_workers=8)
-test_loader = DataLoader(cifar10_test, batch_size = 100, shuffle=False, num_workers=8)
 
 
 # standard training or evaluation loop
@@ -141,6 +139,12 @@ def epoch(loader, model, opt=None, lr_scheduler=None):
 
 
 
+cifar10_train = datasets.CIFAR10(".", train=True, download=True, transform=transforms.ToTensor())
+cifar10_test = datasets.CIFAR10(".", train=False, download=True, transform=transforms.ToTensor())
+train_loader = DataLoader(cifar10_train, batch_size = 50, shuffle=True, num_workers=0)
+test_loader = DataLoader(cifar10_test, batch_size = 50, shuffle=False, num_workers=0)
+
+
 if __name__ == '__main__':
         
     opt = optim.Adam(model.parameters(), lr=1e-3)
@@ -148,6 +152,8 @@ if __name__ == '__main__':
 
     max_epochs = 50
     scheduler = optim.lr_scheduler.CosineAnnealingLR(opt, max_epochs*len(train_loader), eta_min=1e-6)
+
+    # iter(train_loader)
 
     for i in (range(50)):
         print(epoch(train_loader, model, opt, scheduler))

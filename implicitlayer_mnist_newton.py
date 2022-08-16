@@ -69,6 +69,7 @@ layer = TanhNewtonImplicitLayer(5, tol=1e-10).double()
 gradcheck(layer, torch.randn(3, 5, requires_grad=True, dtype=torch.double), check_undefined_grad=False)
 
 torch.manual_seed(0)
+mode = "DEQ"
 if mode=="DEQ":
     model = nn.Sequential(nn.Flatten(), nn.Linear(784, 100),
                         TanhNewtonImplicitLayer(100, max_iter=40),
