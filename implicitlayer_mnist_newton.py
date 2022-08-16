@@ -10,8 +10,8 @@ from torchvision import datasets, transforms
 
 mnist_train = datasets.MNIST(".", train=True, download=True, transform=transforms.ToTensor())
 mnist_test = datasets.MNIST(".", train=False, download=True, transform=transforms.ToTensor())
-train_loader = DataLoader(mnist_train, batch_size = 64, shuffle=True)
-test_loader = DataLoader(mnist_test, batch_size = 64, shuffle=False)
+train_loader = DataLoader(mnist_train, batch_size = 100, shuffle=True)
+test_loader = DataLoader(mnist_test, batch_size = 100, shuffle=False)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class TanhNewtonImplicitLayer(nn.Module):
@@ -34,7 +34,7 @@ class TanhNewtonImplicitLayer(nn.Module):
                     break
 
                 # newton step
-                J = torch.eye(z.shape[1])[None,:,:] - (1 / torch.cosh(z_linear)**2)[:,:,None]*self.linear.weight[None,:,:]
+                J = torch.eye(z.shape[1], device=device)[None,:,:] - (1 / torch.cosh(z_linear)**2)[:,:,None]*self.linear.weight[None,:,:]
                 # z = z - torch.solve(g[:,:,None], J)[0][:,:,0]
                 z = z - torch.linalg.solve(J,g[:,:,None])[:,:,0]
                 self.iterations += 1
@@ -65,8 +65,8 @@ def epoch(loader, model, opt=None, monitor=None):
             total_monitor += monitor(model)
     return total_err / len(loader.dataset), total_loss / len(loader.dataset), total_monitor / len(loader)
 
-layer = TanhNewtonImplicitLayer(5, tol=1e-10).double()
-gradcheck(layer, torch.randn(3, 5, requires_grad=True, dtype=torch.double), check_undefined_grad=False)
+layer = TanhNewtonImplicitLayer(5, tol=1e-10).double().to(device)
+gradcheck(layer, torch.randn(3, 5, device=device, requires_grad=True, dtype=torch.double), check_undefined_grad=False)
 
 torch.manual_seed(0)
 mode = "DEQ"
@@ -83,6 +83,8 @@ opt = optim.SGD(model.parameters(), lr=1e-1)
 for i in range(10):
     if i == 5:
         opt.param_groups[0]["lr"] = 1e-2
+
+    print("# Parmeters: ", sum(a.numel() for a in model.parameters()))
 
     train_err, train_loss, train_fpiter = epoch(train_loader, model, opt, monitor=monitor)
     test_err, test_loss, test_fpiter = epoch(test_loader, model, monitor=monitor)

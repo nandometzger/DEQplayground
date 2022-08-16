@@ -14,16 +14,14 @@ import torch.optim as optim
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-
-
-class ResNetLayer(nn.Module):
+class ResNetLayer(torch.nn.Module):
     def __init__(self, n_channels, n_inner_channels, kernel_size=3, num_groups=8):
         super().__init__()
-        self.conv1 = nn.Conv2d(n_channels, n_inner_channels, kernel_size, padding=kernel_size//2, bias=False)
-        self.conv2 = nn.Conv2d(n_inner_channels, n_channels, kernel_size, padding=kernel_size//2, bias=False)
-        self.norm1 = nn.GroupNorm(num_groups, n_inner_channels)
-        self.norm2 = nn.GroupNorm(num_groups, n_channels)
-        self.norm3 = nn.GroupNorm(num_groups, n_channels)
+        self.conv1 = torch.nn.Conv2d(n_channels, n_inner_channels, kernel_size, padding=kernel_size//2, bias=False)
+        self.conv2 = torch.nn.Conv2d(n_inner_channels, n_channels, kernel_size, padding=kernel_size//2, bias=False)
+        self.norm1 = torch.nn.GroupNorm(num_groups, n_inner_channels)
+        self.norm2 = torch.nn.GroupNorm(num_groups, n_channels)
+        self.norm3 = torch.nn.GroupNorm(num_groups, n_channels)
         self.conv1.weight.data.normal_(0, 0.01)
         self.conv2.weight.data.normal_(0, 0.01)
         
@@ -61,7 +59,7 @@ def anderson(f, x0, m=5, lam=1e-4, max_iter=50, tol=1e-2, beta = 1.0):
     return X[:,k%m].view_as(x0), res
 
 
-class DEQFixedPoint(nn.Module):
+class DEQFixedPoint(torch.nn.Module):
     def __init__(self, f, solver, **kwargs):
         super().__init__()
         self.f = f
@@ -83,6 +81,10 @@ class DEQFixedPoint(nn.Module):
             return g
                 
         z.register_hook(backward_hook)
+
+        meta = {
+            "forward_res": self.forward_res, 
+        }
         return z
 
 # run a very small network with double precision, iterating to high precision
@@ -106,20 +108,25 @@ out = deq(X)
 
 
 torch.manual_seed(0)
-chan = 48
+chan = 24
 f = ResNetLayer(chan, 64, kernel_size=3)
-model = nn.Sequential(nn.Conv2d(3,chan, kernel_size=3, bias=True, padding=1),
-                      nn.BatchNorm2d(chan),
+model = torch.nn.Sequential(torch.nn.Conv2d(3,chan, kernel_size=3, bias=True, padding=1),
+                      torch.nn.BatchNorm2d(chan),
                       DEQFixedPoint(f, anderson, tol=1e-2, max_iter=25, m=5),
-                      nn.BatchNorm2d(chan),
-                      nn.AvgPool2d(8,8),
-                      nn.Flatten(),
-                      nn.Linear(chan*4*4,10)).to(device)
+                    #   torch.nn.ReLU(),
+                    #   torch.nn.Conv2d(chan,64, kernel_size=3, bias=True, padding=1),
+                    #   torch.nn.ReLU(),
+                    #   torch.nn.Conv2d(64,chan, kernel_size=3, bias=True, padding=1),
+                      torch.nn.ReLU(),
+                      torch.nn.BatchNorm2d(chan),
+                      torch.nn.AvgPool2d(8,8),
+                      torch.nn.Flatten(),
+                      torch.nn.Linear(chan*4*4,10)).to(device)
 
 
 # standard training or evaluation loop
 def epoch(loader, model, opt=None, lr_scheduler=None):
-    total_loss, total_err = 0.,0.
+    total_loss, total_err, total_iter, final_res = 0.,0.,0.,0.
     model.eval() if opt is None else model.train()
     for X,y in tqdm(loader):
         X,y = X.to(device), y.to(device)
@@ -133,16 +140,16 @@ def epoch(loader, model, opt=None, lr_scheduler=None):
                 
         total_err += (yp.max(dim=1)[1] != y).sum().item()
         total_loss += loss.item() * X.shape[0]
+        total_iter += len(model[2].forward_res) *X.shape[0]
+        final_res += model[2].forward_res[-1] * X.shape[0]
 
-    return total_err / len(loader.dataset), total_loss / len(loader.dataset)
-
-
+    return total_err / len(loader.dataset), total_loss / len(loader.dataset), total_iter/len(loader.dataset), final_res/len(loader.dataset)
 
 
 cifar10_train = datasets.CIFAR10(".", train=True, download=True, transform=transforms.ToTensor())
 cifar10_test = datasets.CIFAR10(".", train=False, download=True, transform=transforms.ToTensor())
-train_loader = DataLoader(cifar10_train, batch_size = 50, shuffle=True, num_workers=0)
-test_loader = DataLoader(cifar10_test, batch_size = 50, shuffle=False, num_workers=0)
+train_loader = DataLoader(cifar10_train, batch_size = 25, shuffle=True, num_workers=0)
+test_loader = DataLoader(cifar10_test, batch_size = 25, shuffle=False, num_workers=0)
 
 
 if __name__ == '__main__':
@@ -152,8 +159,6 @@ if __name__ == '__main__':
 
     max_epochs = 50
     scheduler = optim.lr_scheduler.CosineAnnealingLR(opt, max_epochs*len(train_loader), eta_min=1e-6)
-
-    # iter(train_loader)
 
     for i in (range(50)):
         print(epoch(train_loader, model, opt, scheduler))
